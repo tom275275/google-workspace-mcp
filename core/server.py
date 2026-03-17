@@ -13,6 +13,7 @@ from starlette.middleware import Middleware
 
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.google import GoogleProvider
+from mcp.types import Icon
 
 from auth.oauth21_session_store import get_oauth21_session_store, set_auth_provider
 from auth.google_auth import handle_auth_callback, start_auth_flow, check_client_secrets
@@ -112,6 +113,13 @@ server = SecureFastMCP(
     name="google_workspace",
     auth=None,
     instructions=_server_instructions,
+    icons=[
+        Icon(
+            src="https://www.gstatic.com/images/branding/product/2x/hh_workspace_96dp.png",
+            mimeType="image/png",
+            sizes=["96x96"],
+        )
+    ],
 )
 
 # Add the AuthInfo middleware to inject authentication into FastMCP context
