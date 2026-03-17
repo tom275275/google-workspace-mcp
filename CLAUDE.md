@@ -43,6 +43,7 @@ First use will trigger a Google OAuth consent flow in the browser.
 - **Auth**: OAuth 2.1 with Web application OAuth client
 - **Secrets**: Stored in Google Secret Manager, mounted as env vars at runtime
 - **Scaling**: Scales to zero when idle; cold start ~2-3s
+- **Token persistence**: OAuth credentials stored in GCS bucket (`tom-personal-tools-mcp-state`), mounted at `/mnt/mcp-state` — survives container restarts
 - **CI/CD**: Cloud Build trigger on push to `main` auto-deploys
 
 ## Enabled Tools
@@ -77,6 +78,7 @@ Chat and Slides are also disabled (not needed).
 | `WORKSPACE_MCP_BASE_URI` | Env var | Public Cloud Run base URL |
 | `GOOGLE_OAUTH_REDIRECT_URI` | Env var | Full OAuth callback URL |
 | `WORKSPACE_EXTERNAL_URL` | Env var | Overrides base_uri:port for OAuth metadata |
+| `WORKSPACE_MCP_CREDENTIALS_DIR` | Env var (`/mnt/mcp-state/credentials`) | Points credential store at GCS-backed volume |
 
 > **Critical**: `WORKSPACE_EXTERNAL_URL` must be set to the public Cloud Run URL (without port).
 > Without it, the server advertises `:8000` in its OAuth metadata, breaking all auth flows.
@@ -86,6 +88,7 @@ Chat and Slides are also disabled (not needed).
 - **Cloud Run service**: `google-workspace-mcp` (us-central1)
 - **Artifact Registry repo**: `cloud-run-source-deploy` (us-central1)
 - **Secret Manager secrets**: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`
+- **GCS bucket**: `tom-personal-tools-mcp-state` (us-central1) — persists OAuth credential files across container restarts
 - **OAuth client**: `google-workspace-mcp-cloudrun-web` (**Web application** type) in tom-personal-tools
 - **Authorized redirect URI**: `https://google-workspace-mcp-557522843498.us-central1.run.app/oauth2callback`
 
@@ -115,8 +118,35 @@ gcloud run deploy google-workspace-mcp \
   --port=8000 \
   --memory=512Mi \
   --set-secrets="GOOGLE_OAUTH_CLIENT_ID=GOOGLE_OAUTH_CLIENT_ID:latest,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest" \
-  --set-env-vars="MCP_ENABLE_OAUTH21=true,USER_GOOGLE_EMAIL=tschreiter@gmail.com,TOOLS=drive docs sheets forms tasks contacts appscript search,WORKSPACE_MCP_BASE_URI=https://google-workspace-mcp-557522843498.us-central1.run.app,GOOGLE_OAUTH_REDIRECT_URI=https://google-workspace-mcp-557522843498.us-central1.run.app/oauth2callback,WORKSPACE_EXTERNAL_URL=https://google-workspace-mcp-557522843498.us-central1.run.app" \
+  --set-env-vars="MCP_ENABLE_OAUTH21=true,USER_GOOGLE_EMAIL=tschreiter@gmail.com,TOOLS=drive docs sheets forms tasks contacts appscript search,WORKSPACE_MCP_BASE_URI=https://google-workspace-mcp-557522843498.us-central1.run.app,GOOGLE_OAUTH_REDIRECT_URI=https://google-workspace-mcp-557522843498.us-central1.run.app/oauth2callback,WORKSPACE_EXTERNAL_URL=https://google-workspace-mcp-557522843498.us-central1.run.app,WORKSPACE_MCP_CREDENTIALS_DIR=/mnt/mcp-state/credentials" \
+  --add-volume=name=mcp-state,type=cloud-storage,bucket=tom-personal-tools-mcp-state \
+  --add-volume-mount=volume=mcp-state,mount-path=/mnt/mcp-state \
   --timeout=300
+```
+
+## One-Time GCS Setup (already done)
+
+Before the volume mount works, the bucket and IAM binding must exist. Run once:
+
+```bash
+# Create bucket (us-central1 = same region as Cloud Run, within free tier)
+gcloud storage buckets create gs://tom-personal-tools-mcp-state \
+  --project=tom-personal-tools \
+  --location=us-central1 \
+  --uniform-bucket-level-access
+
+# Find the Cloud Run service account
+gcloud run services describe google-workspace-mcp \
+  --project=tom-personal-tools \
+  --region=us-central1 \
+  --format="value(spec.template.spec.serviceAccountName)"
+# If blank, the default Compute SA is used:
+# <project-number>-compute@developer.gserviceaccount.com
+
+# Grant the service account write access to the bucket
+gcloud storage buckets add-iam-policy-binding gs://tom-personal-tools-mcp-state \
+  --member="serviceAccount:<SA_EMAIL>" \
+  --role="roles/storage.objectAdmin"
 ```
 
 ## Pulling Upstream Updates
@@ -171,6 +201,12 @@ Don't blindly enable all tools. Claude Code already has first-party integrations
 and Calendar via claude.ai — enabling duplicate tools wastes context window space and
 creates ambiguity about which tool to use. Audit existing integrations before enabling
 services in a new MCP server.
+
+### Cloud Run filesystem is ephemeral — use GCS for state
+Each container restart (including scale-from-zero) wipes the local filesystem. OAuth credential
+files stored locally are lost, requiring full re-auth on every cold start. Fix: mount a GCS
+bucket via `--add-volume` / `--add-volume-mount` and point `WORKSPACE_MCP_CREDENTIALS_DIR` at
+the mount path. The credential JSON then persists across restarts with zero code changes.
 
 ### Icon support
 MCP spec 2025-11-25 added icon support via the `icons` array on the `Implementation` object.
