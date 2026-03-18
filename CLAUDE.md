@@ -58,7 +58,7 @@ Chat and Slides are also disabled (not needed).
 | Forms | ✅ | Form management |
 | Tasks | ✅ | Task management |
 | Contacts | ✅ | People API |
-| Apps Script | ✅ | Automation |
+| Apps Script | ❌ | Re-enable when needed (add `appscript` to TOOLS) |
 | Search | ✅ | Programmable Search Engine |
 | Gmail | ❌ | Use claude.ai Gmail integration |
 | Calendar | ❌ | Use claude.ai Google Calendar integration |
@@ -88,6 +88,7 @@ Chat and Slides are also disabled (not needed).
 - **Secret Manager secrets**: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`
 - **OAuth client**: `google-workspace-mcp-cloudrun-web` (**Web application** type) in tom-personal-tools
 - **Authorized redirect URI**: `https://google-workspace-mcp-557522843498.us-central1.run.app/oauth2callback`
+- **GCS bucket**: `tom-personal-tools-mcp-state` (us-central1) — credential persistence volume, mounted at `/mnt/mcp-state`
 
 > **Important**: OAuth client must be **Web application** type, not Desktop app.
 > Desktop app clients only allow localhost redirect URIs and will block Cloud Run callbacks.
@@ -114,8 +115,10 @@ gcloud run deploy google-workspace-mcp \
   --allow-unauthenticated \
   --port=8000 \
   --memory=512Mi \
+  --add-volume=name=mcp-state,type=cloud-storage,bucket=tom-personal-tools-mcp-state \
+  --add-volume-mount=volume=mcp-state,mount-path=/mnt/mcp-state \
   --set-secrets="GOOGLE_OAUTH_CLIENT_ID=GOOGLE_OAUTH_CLIENT_ID:latest,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest" \
-  --set-env-vars="MCP_ENABLE_OAUTH21=true,USER_GOOGLE_EMAIL=tschreiter@gmail.com,TOOLS=drive docs sheets forms tasks contacts appscript search,WORKSPACE_MCP_BASE_URI=https://google-workspace-mcp-557522843498.us-central1.run.app,GOOGLE_OAUTH_REDIRECT_URI=https://google-workspace-mcp-557522843498.us-central1.run.app/oauth2callback,WORKSPACE_EXTERNAL_URL=https://google-workspace-mcp-557522843498.us-central1.run.app" \
+  --set-env-vars="MCP_ENABLE_OAUTH21=true,USER_GOOGLE_EMAIL=tschreiter@gmail.com,TOOLS=drive docs sheets forms tasks contacts search,WORKSPACE_MCP_BASE_URI=https://google-workspace-mcp-557522843498.us-central1.run.app,GOOGLE_OAUTH_REDIRECT_URI=https://google-workspace-mcp-557522843498.us-central1.run.app/oauth2callback,WORKSPACE_EXTERNAL_URL=https://google-workspace-mcp-557522843498.us-central1.run.app,WORKSPACE_MCP_CREDENTIALS_DIR=/mnt/mcp-state/credentials" \
   --timeout=300
 ```
 
@@ -172,11 +175,40 @@ and Calendar via claude.ai — enabling duplicate tools wastes context window sp
 creates ambiguity about which tool to use. Audit existing integrations before enabling
 services in a new MCP server.
 
+### Credentials lost on scale-to-zero
+
+Cloud Run scales to zero when idle and wipes the ephemeral container filesystem on restart.
+The OAuth credential file (written by the app after the first auth flow) is lost, forcing
+re-authentication on every cold start.
+
+**Fix**: Mount a GCS bucket (`tom-personal-tools-mcp-state`) as a Cloud Storage FUSE volume
+at `/mnt/mcp-state`, and set `WORKSPACE_MCP_CREDENTIALS_DIR=/mnt/mcp-state/credentials`.
+The credential JSON is written to the bucket and survives restarts. Zero code changes required —
+the app already respects `WORKSPACE_MCP_CREDENTIALS_DIR`.
+
+The bucket uses uniform bucket-level access with IAM restricted to the Cloud Run service account
+(`557522843498-compute@developer.gserviceaccount.com`, `roles/storage.objectAdmin`).
+
 ### Icon support
 MCP spec 2025-11-25 added icon support via the `icons` array on the `Implementation` object.
 FastMCP 3.1.1+ supports this via the `icons` parameter on the `FastMCP` constructor.
-Use base64 data URIs for SVGs to avoid external URL dependencies:
+
+**Use an HTTPS URL, not a base64 data URI.** Claude.ai ignores `data:` URIs in the `src`
+field — the icon will not appear. Use a stable public URL instead, e.g. Simple Icons CDN:
 ```python
 from mcp.types import Icon
-FastMCP(icons=[Icon(src="data:image/svg+xml;base64,...", mimeType="image/svg+xml", sizes=["any"])])
+FastMCP(icons=[Icon(src="https://cdn.simpleicons.org/googledrive", mimeType="image/svg+xml", sizes=["any"])])
 ```
+
+> **TODO**: The current icon in `core/server.py` is still a base64 data URI and does not
+> render in claude.ai. Switch to `https://cdn.simpleicons.org/googledrive` or similar.
+
+### OAuth app in Testing mode
+Google OAuth apps in **Testing** status issue refresh tokens that expire after **7 days**
+when sensitive scopes (Drive, Docs, Sheets, etc.) are requested. The credential file in
+GCS will go stale after 7 days, requiring re-authentication.
+
+**Fix**: Publish the app in Google Cloud Console → APIs & Services → OAuth consent screen →
+**Publish App**. You do not need to submit for verification — publishing as unverified is
+sufficient. Users (just you) will see an "unverified app" warning on first auth; click
+"Advanced → Go to [app name]". After that, refresh tokens do not expire.

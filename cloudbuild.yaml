@@ -11,8 +11,10 @@ steps:
       - --allow-unauthenticated
       - --port=8000
       - --memory=512Mi
+      - --add-volume=name=mcp-state,type=cloud-storage,bucket=tom-personal-tools-mcp-state
+      - --add-volume-mount=volume=mcp-state,mount-path=/mnt/mcp-state
       - --set-secrets=GOOGLE_OAUTH_CLIENT_ID=GOOGLE_OAUTH_CLIENT_ID:latest,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest
-      - --set-env-vars=MCP_ENABLE_OAUTH21=true,USER_GOOGLE_EMAIL=tschreiter@gmail.com,TOOLS=drive docs sheets forms tasks contacts appscript search,WORKSPACE_MCP_BASE_URI=https://google-workspace-mcp-557522843498.us-central1.run.app,GOOGLE_OAUTH_REDIRECT_URI=https://google-workspace-mcp-557522843498.us-central1.run.app/oauth2callback,WORKSPACE_EXTERNAL_URL=https://google-workspace-mcp-557522843498.us-central1.run.app
+      - --set-env-vars=MCP_ENABLE_OAUTH21=true,USER_GOOGLE_EMAIL=tschreiter@gmail.com,TOOLS=drive docs sheets forms tasks contacts appscript search,WORKSPACE_MCP_BASE_URI=https://google-workspace-mcp-557522843498.us-central1.run.app,GOOGLE_OAUTH_REDIRECT_URI=https://google-workspace-mcp-557522843498.us-central1.run.app/oauth2callback,WORKSPACE_EXTERNAL_URL=https://google-workspace-mcp-557522843498.us-central1.run.app,WORKSPACE_MCP_CREDENTIALS_DIR=/mnt/mcp-state/credentials
       - --timeout=300
 
 options:
